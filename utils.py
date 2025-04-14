@@ -1,10 +1,10 @@
 # utils.py
-import fitz  # PyMuPDF
+import fitz               # PyMuPDF
 import docx
 from collections import defaultdict
 import re
 
-
+# ── PRD TEMPLATE ──────────────────────────────────────────────────────────────
 prd_template = """
 # 1. Document Overview
 - **Title:** {Title}
@@ -62,6 +62,7 @@ prd_template = """
 - **Change Log:** {Change Log}
 """
 
+# ── FIELD LIST & SMART QUESTIONS ──────────────────────────────────────────────
 prd_fields_and_questions = [
     ("Title", "What is the title of the product or feature?"),
     ("Document Version and Date", "What is the current version and update date for this document?"),
@@ -109,6 +110,9 @@ prd_fields_and_questions = [
     ("Change Log", "Would you like to maintain a change log for this document?")
 ]
 
+FIELD_NAMES = [f[0] for f in prd_fields_and_questions]
+
+# ── PARSERS ────────────────────────────────────────────────────────────────────
 def parse_prd_file(uploaded_file):
     name = uploaded_file.name.lower()
     if name.endswith(".pdf"):
@@ -129,14 +133,12 @@ def _parse_pdf(file):
 
 def _parse_docx(file):
     doc = docx.Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
+    return "\n".join(p.text for p in doc.paragraphs)
 
-def fill_prd_template(template, answers):
-    # answers can be either a dict or a string with field: value
-    if isinstance(answers, str):
-        field_map = defaultdict(lambda: "TBD")
-        for match in re.findall(r"(?m)^([A-Za-z ()]+):\s*(.+)$", answers):
-            key, val = match
-            field_map[key.strip()] = val.strip()
-        answers = field_map
-    return template.format_map(defaultdict(lambda: "TBD", answers))
+# ── TEMPLATE FILLER ───────────────────────────────────────────────────────────
+def fill_prd_template(template: str, answers: dict[str, str]) -> str:
+    """Replace each placeholder with answer or 'TBD'."""
+    out = template
+    for field in FIELD_NAMES:
+        out = out.replace(f"{{{field}}}", answers.get(field, "TBD"))
+    return out
