@@ -1,6 +1,9 @@
 # utils.py
 import fitz  # PyMuPDF
 import docx
+from collections import defaultdict
+import re
+
 
 prd_template = """
 # 1. Document Overview
