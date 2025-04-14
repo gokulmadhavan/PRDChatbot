@@ -63,13 +63,6 @@ st.markdown("""
         z-index: 9999;
         background-color: rgba(255, 255, 255, 0.7);
     }
-    .password-box {
-        background: white;
-        padding: 2rem;
-        border-radius: 12px;
-        box-shadow: 0 0 25px rgba(0,0,0,0.1);
-        min-width: 300px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -78,7 +71,6 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.markdown('<div class="centered-container"><div class="password-box">', unsafe_allow_html=True)
     st.subheader("🔐 Enter Password")
     password_input = st.text_input("Password", type="password")
     if password_input == PASSWORD:
