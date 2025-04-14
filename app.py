@@ -2,15 +2,15 @@ import streamlit as st
 from dotenv import load_dotenv
 from utils import prd_template, prd_fields_and_questions, fill_prd_template
 import os
-import openai
 import time
 from io import BytesIO
 from docx import Document
 from fpdf import FPDF
+from openai import OpenAI, RateLimitError, APIError
 
 # --- Setup ---
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 APP_PASSWORD = os.getenv("APP_PASSWORD", "secret123")
 
 st.set_page_config(page_title="PRD Chatbot", layout="centered")
@@ -64,8 +64,8 @@ if not st.session_state.authenticated:
 def infer_fields_from_text(text, current_answers):
     prompt = "You're a helpful assistant filling out a Product Requirement Document (PRD). Extract as many fields as possible from this input and return them in the format:\n\nTitle: ...\nPurpose: ...\n...\n\nOnly include fields from this list:\n" + ", ".join([f[0] for f in prd_fields_and_questions]) + f"\n\nUser input:\n{text}"
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",  # or "gpt-4", replace as needed
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",  # or "gpt-4", "gpt-4o" when available
             messages=[{"role": "system", "content": prompt}],
             temperature=0.3
         )
@@ -78,12 +78,15 @@ def infer_fields_from_text(text, current_answers):
                 if k in [f[0] for f in prd_fields_and_questions] and v:
                     updates[k] = v
         return updates
-    except openai.error.RateLimitError:
-        st.warning("⚠️ Rate limit hit. Please wait a moment.")
+    except RateLimitError:
+        st.warning("⚠️ OpenAI rate limit hit. Retrying in a few seconds...")
         time.sleep(5)
         return {}
+    except APIError as e:
+        st.error(f"🚨 API Error: {e}")
+        return {}
     except Exception as e:
-        st.error(f"❌ Error contacting OpenAI: {e}")
+        st.error(f"❌ Unexpected Error: {e}")
         return {}
 
 # --- Chat Display ---
