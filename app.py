@@ -45,30 +45,11 @@ if not state.authenticated:
     password_modal()
     st.stop()
 
-# ── SIDEBAR: UPLOAD EXISTING / IN‑PROGRESS PRD ────────────────────────────────
-with st.sidebar:
-    st.header("📤 Import Existing PRD")
-    up = st.file_uploader("Upload .pdf / .docx / .md / .txt",
-                          type=["pdf", "docx", "md", "txt"])
-    if up and "uploaded_once" not in state:
-        from utils import parse_prd_file
-        text = parse_prd_file(up)
-        # Use LLM to extract everything it can from the doc
-        extracted, _ = llm_extract_and_ask(
-            user_text=text,
-            answers=state.answers
-        )
-        clean = {canon_key(k): v for k, v in extracted.items() if canon_key(k)}
-        state.answers.update(clean)
-        state.uploaded_once = True
-        st.success("✅ Information imported! Return to the main chat.")
-        st.rerun()
-
-
 # ── KEY CANONICALISER ──────────────────────────────────────────────────────────
 CANON = {f.lower(): f for f in FIELD_NAMES}
 def canon_key(k: str) -> str | None:
     return CANON.get(k.strip().lower())
+
 
 # ── LLM HELPER ────────────────────────────────────────────────────────────────
 def llm_extract_and_ask(user_text: str, answers: dict):
@@ -103,6 +84,26 @@ def llm_extract_and_ask(user_text: str, answers: dict):
         st.error(f"OpenAI/API error: {e}"); return {}, None
     except Exception as e:
         st.error(f"Unexpected error: {e}"); return {}, None
+
+# ── SIDEBAR: UPLOAD EXISTING / IN‑PROGRESS PRD ────────────────────────────────
+with st.sidebar:
+    st.header("📤 Import Existing PRD")
+    up = st.file_uploader("Upload .pdf / .docx / .md / .txt",
+                          type=["pdf", "docx", "md", "txt"])
+    if up and "uploaded_once" not in state:
+        from utils import parse_prd_file
+        text = parse_prd_file(up)
+        # Use LLM to extract everything it can from the doc
+        extracted, _ = llm_extract_and_ask(
+            user_text=text,
+            answers=state.answers
+        )
+        clean = {canon_key(k): v for k, v in extracted.items() if canon_key(k)}
+        state.answers.update(clean)
+        state.uploaded_once = True
+        st.success("✅ Information imported! Return to the main chat.")
+        st.rerun()
+
 
 # ── CHAT UI ────────────────────────────────────────────────────────────────────
 st.title("📄 PRD Chatbot Assistant")
