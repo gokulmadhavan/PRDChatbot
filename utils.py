@@ -134,8 +134,6 @@ def _parse_docx(file):
 def fill_prd_template(template, answers):
     # answers can be either a dict or a string with field: value
     if isinstance(answers, str):
-        from collections import defaultdict
-        import re
         field_map = defaultdict(lambda: "TBD")
         for match in re.findall(r"(?m)^([A-Za-z ()]+):\s*(.+)$", answers):
             key, val = match
