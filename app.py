@@ -1,160 +1,149 @@
 import streamlit as st
 from dotenv import load_dotenv
 from utils import prd_template, prd_fields_and_questions, fill_prd_template
-import os
-import time
+from openai import OpenAI, RateLimitError, APIError
+import os, time, json
 from io import BytesIO
 from docx import Document
 from fpdf import FPDF
-from openai import OpenAI, RateLimitError, APIError
 
-# --- Setup ---
+# ── ENV / CLIENT ────────────────────────────────────────────────────────────────
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+MODEL_NAME   = os.getenv("MODEL_NAME", "gpt-4o-mini")     # or gpt-4o
 APP_PASSWORD = os.getenv("APP_PASSWORD", "secret123")
+client       = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-st.set_page_config(page_title="PRD Chatbot", layout="centered")
+# ── PAGE & STATE ────────────────────────────────────────────────────────────────
+st.set_page_config("PRD Chatbot", layout="centered")
 
-# --- Session State ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "answers" not in st.session_state:
-    st.session_state.answers = {}
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "last_field" not in st.session_state:
-    st.session_state.last_field = None
-if "export_format" not in st.session_state:
-    st.session_state.export_format = "txt"
+state = st.session_state
+state.setdefault("authenticated",   False)
+state.setdefault("answers",         {})      # field → text
+state.setdefault("chat_history",    [])      # list[(role,msg)]
+state.setdefault("pending_question", None)   # last question asked
 
-# --- Password Modal ---
-def show_password_modal():
+# ── PASSWORD GATE ───────────────────────────────────────────────────────────────
+def password_modal():
     st.markdown("""
         <style>
-        .stApp { backdrop-filter: blur(6px); }
-        .password-box {
-            background-color: white;
-            padding: 2rem;
-            border-radius: 10px;
-            max-width: 400px;
-            margin: 8% auto;
-            box-shadow: 0 0 15px rgba(0,0,0,0.15);
-            text-align: center;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+        .stApp{backdrop-filter:blur(6px);}
+        .pwd{background:#fff;padding:2rem;border-radius:8px;
+             max-width:350px;margin:10% auto;box-shadow:0 0 12px rgba(0,0,0,.15);}
+        </style>""", unsafe_allow_html=True)
+    st.markdown('<div class="pwd">', unsafe_allow_html=True)
+    st.markdown("### 🔐 Enter Password")
+    pw = st.text_input("Password", type="password")
+    if st.button("Unlock"):
+        if pw == APP_PASSWORD:
+            state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    with st.container():
-        st.markdown('<div class="password-box">', unsafe_allow_html=True)
-        st.markdown("### 🔐 Enter Password")
-        password_input = st.text_input("Password", type="password")
-        if st.button("Unlock"):
-            if password_input == APP_PASSWORD:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Incorrect password.")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-if not st.session_state.authenticated:
-    show_password_modal()
+if not state.authenticated:
+    password_modal()
     st.stop()
 
-# --- Inference Helper ---
-def infer_fields_from_text(text, current_answers):
-    prompt = "You're a helpful assistant filling out a Product Requirement Document (PRD). Extract as many fields as possible from this input and return them in the format:\n\nTitle: ...\nPurpose: ...\n...\n\nOnly include fields from this list:\n" + ", ".join([f[0] for f in prd_fields_and_questions]) + f"\n\nUser input:\n{text}"
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # or "gpt-4", "gpt-4o" when available
-            messages=[{"role": "system", "content": prompt}],
-            temperature=0.3
-        )
-        content = response.choices[0].message.content
-        updates = {}
-        for line in content.strip().splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                k, v = k.strip(), v.strip()
-                if k in [f[0] for f in prd_fields_and_questions] and v:
-                    updates[k] = v
-        return updates
-    except RateLimitError:
-        st.warning("⚠️ OpenAI rate limit hit. Retrying in a few seconds...")
-        time.sleep(5)
-        return {}
-    except APIError as e:
-        st.error(f"🚨 API Error: {e}")
-        return {}
-    except Exception as e:
-        st.error(f"❌ Unexpected Error: {e}")
-        return {}
+# ── LLM HELPER ─────────────────────────────────────────────────────────────────
+FIELD_NAMES = [f[0] for f in prd_fields_and_questions]
 
-# --- Chat Display ---
+def llm_extract_and_ask(user_text:str, answers:dict):
+    """
+    Returns dict(extracted_fields:dict, next_question:str|None)
+    """
+    sys = (
+        "You are an expert product‑requirements interviewer. "
+        "You have the PRD field list below. "
+        "1️⃣ Extract ANY fields you see in the user's reply.\n"
+        "2️⃣ If some fields remain blank, ask ONE concise follow‑up question "
+        "that will most efficiently obtain missing info. "
+        "3️⃣ Return ONLY valid JSON with keys extracted_fields and next_question.\n\n"
+        f"PRD fields: {', '.join(FIELD_NAMES)}\n"
+    )
+    user = (
+        f"Current filled fields JSON:\n{json.dumps(answers, indent=2)}\n\n"
+        f"User reply:\n{user_text}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model     = MODEL_NAME,
+            temperature=0.3,
+            messages=[{"role":"system","content":sys},
+                      {"role":"user",  "content":user}]
+        )
+        content = resp.choices[0].message.content.strip()
+        data    = json.loads(content)        # raises if not valid JSON
+        return data.get("extracted_fields",{}), data.get("next_question")
+    except RateLimitError:
+        st.warning("⚠️ Rate limit hit, retrying …"); time.sleep(5); return {}, None
+    except (APIError, json.JSONDecodeError) as e:
+        st.error(f"OpenAI/API error: {e}"); return {}, None
+    except Exception as e:
+        st.error(f"Unexpected error: {e}"); return {}, None
+
+# ── CHAT UI ────────────────────────────────────────────────────────────────────
 st.title("📄 PRD Chatbot Assistant")
 
-for role, message in st.session_state.chat_history:
-    with st.chat_message(role):
-        st.markdown(message)
+for role,msg in state.chat_history:
+    with st.chat_message(role): st.markdown(msg)
 
-# --- Next Field Logic ---
-next_q = None
-for field, question in prd_fields_and_questions:
-    if field not in st.session_state.answers:
-        next_q = (field, question)
-        break
+# ── PROCESS USER INPUT ────────────────────────────────────────────────────────
+user_input = st.chat_input("Type here…")
 
-# --- Chat Interaction ---
-if next_q:
-    field, question = next_q
-    with st.chat_message("assistant"):
-        st.markdown(f"**{question}**")
+if user_input:
+    state.chat_history.append(("user", user_input))
 
-    user_input = st.chat_input("Your response...")
-    if user_input:
-        st.session_state.chat_history.append(("user", user_input))
-        inferred = infer_fields_from_text(user_input, st.session_state.answers)
-        st.session_state.answers.update(inferred)
-        if field not in inferred:
-            st.session_state.answers[field] = user_input
-        with st.chat_message("assistant"):
-            st.markdown("✅ Got it. Updating the document...")
-        st.rerun()
-else:
-    with st.chat_message("assistant"):
-        st.markdown("🎉 All set! You can download your PRD below or preview it live.")
+    # ① Call LLM to extract + get next question
+    extracted, nxt_q = llm_extract_and_ask(user_input, state.answers)
+    state.answers.update(extracted)
 
-# --- Filled PRD ---
-filled_prd = fill_prd_template(prd_template, st.session_state.answers)
+    # ② Store next question (if any) & reply
+    if nxt_q:
+        state.pending_question = nxt_q
+        state.chat_history.append(("assistant", f"**{nxt_q}**"))
+    else:
+        state.pending_question = None
+        state.chat_history.append(
+            ("assistant", "🎉 Thank you! All fields are filled. "
+                          "You can preview or export your PRD below.")
+        )
+    st.rerun()
 
-# --- Export Options ---
-st.subheader("📦 Export Options")
-format = st.selectbox("Choose format", ["txt", "md", "docx", "pdf"])
-st.session_state.export_format = format
+# ── FIRST TURN (no pending question yet) ───────────────────────────────────────
+if not state.chat_history and not state.pending_question:
+    first_q = "Great! Let’s start – what is the **Title** of this product or feature?"
+    state.pending_question = first_q
+    state.chat_history.append(("assistant", f"**{first_q}**"))
+    st.rerun()
 
-def convert_and_download(format, content):
-    if format == "txt":
-        st.download_button("📥 Download TXT", content, file_name="PRD.txt")
-    elif format == "md":
-        st.download_button("📥 Download Markdown", content, file_name="PRD.md")
-    elif format == "docx":
-        doc = Document()
-        for para in content.split("\n"):
-            doc.add_paragraph(para)
-        buffer = BytesIO()
-        doc.save(buffer)
-        st.download_button("📥 Download DOCX", buffer.getvalue(), file_name="PRD.docx")
-    elif format == "pdf":
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        for line in content.split("\n"):
-            pdf.multi_cell(0, 8, txt=line)
-        buffer = BytesIO()
-        pdf.output(buffer)
-        st.download_button("📥 Download PDF", buffer.getvalue(), file_name="PRD.pdf")
+# ── RENDER LAST ASSISTANT QUESTION (if page loaded after rerun) ────────────────
+if state.pending_question and (not state.chat_history or state.chat_history[-1][0] != "assistant"):
+    with st.chat_message("assistant"): st.markdown(f"**{state.pending_question}**")
 
-convert_and_download(format, filled_prd)
+# ── FILLED PRD + PREVIEW + EXPORT ─────────────────────────────────────────────
+all_filled = len(state.answers) == len(FIELD_NAMES)
 
-# --- Live Preview ---
-with st.expander("📄 Live Preview of PRD", expanded=True):
-    st.markdown("```markdown\n" + filled_prd + "\n```")
+filled_prd = fill_prd_template(prd_template, state.answers)
+
+st.divider()
+st.subheader("📦 Export")
+fmt = st.selectbox("Format", ["txt","md","docx","pdf"])
+def export(content, fmt):
+    if fmt=="txt":
+        st.download_button("Download TXT", content, "PRD.txt")
+    elif fmt=="md":
+        st.download_button("Download Markdown", content, "PRD.md")
+    elif fmt=="docx":
+        doc = Document(); [doc.add_paragraph(p) for p in content.split("\n")]
+        buf = BytesIO(); doc.save(buf)
+        st.download_button("Download DOCX", buf.getvalue(), "PRD.docx")
+    elif fmt=="pdf":
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12)
+        for line in content.split("\n"): pdf.multi_cell(0, 8, line)
+        buf = BytesIO(); pdf.output(buf)
+        st.download_button("Download PDF", buf.getvalue(), "PRD.pdf")
+export(filled_prd, fmt)
+
+with st.expander("📄 Live PRD Preview", expanded=True):
+    st.markdown(f"```markdown\n{filled_prd}\n```")
