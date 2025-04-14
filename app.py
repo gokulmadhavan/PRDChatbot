@@ -45,6 +45,26 @@ if not state.authenticated:
     password_modal()
     st.stop()
 
+# ── SIDEBAR: UPLOAD EXISTING / IN‑PROGRESS PRD ────────────────────────────────
+with st.sidebar:
+    st.header("📤 Import Existing PRD")
+    up = st.file_uploader("Upload .pdf / .docx / .md / .txt",
+                          type=["pdf", "docx", "md", "txt"])
+    if up and "uploaded_once" not in state:
+        from utils import parse_prd_file
+        text = parse_prd_file(up)
+        # Use LLM to extract everything it can from the doc
+        extracted, _ = llm_extract_and_ask(
+            user_text=text,
+            answers=state.answers
+        )
+        clean = {canon_key(k): v for k, v in extracted.items() if canon_key(k)}
+        state.answers.update(clean)
+        state.uploaded_once = True
+        st.success("✅ Information imported! Return to the main chat.")
+        st.rerun()
+
+
 # ── KEY CANONICALISER ──────────────────────────────────────────────────────────
 CANON = {f.lower(): f for f in FIELD_NAMES}
 def canon_key(k: str) -> str | None:
@@ -141,11 +161,12 @@ def export(content: str, fmt: str):
 
     elif fmt == "docx":
         doc = Document()
-        for p in content.split("\n"):
-            doc.add_paragraph(p)
+        from utils import markdown_to_docx
+        markdown_to_docx(doc, content)
         buf = BytesIO()
         doc.save(buf)
-        st.download_button("Download DOCX", buf.getvalue(), "PRD.docx")
+        st.download_button("Download Word Doc", buf.getvalue(), "PRD.docx")
+
 
     elif fmt == "pdf":
         pdf = FPDF()

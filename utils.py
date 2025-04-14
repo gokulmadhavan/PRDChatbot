@@ -142,3 +142,52 @@ def fill_prd_template(template: str, answers: dict[str, str]) -> str:
     for field in FIELD_NAMES:
         out = out.replace(f"{{{field}}}", answers.get(field, "TBD"))
     return out
+
+
+# ── MARKDOWN → DOCX ───────────────────────────────────────────────────────────
+from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text  import WD_BREAK
+
+def markdown_to_docx(doc: Document, md: str):
+    """
+    Very small subset: headings, bold, italic, bullets, paragraphs.
+    """
+    for line in md.splitlines():
+        if not line.strip():
+            doc.add_paragraph("")          # blank line
+            continue
+
+        # Headings
+        if line.startswith("#"):
+            lvl = len(line) - len(line.lstrip("#"))
+            text = line.lstrip("#").strip()
+            p = doc.add_heading(text, level=min(lvl, 4))
+            continue
+
+        # Bullets
+        if line.lstrip().startswith(("-", "*")):
+            text = line.lstrip("-* ").strip()
+            p = doc.add_paragraph(style="List Bullet")
+        else:
+            p = doc.add_paragraph()
+
+        # Inline bold / italics
+        i = 0
+        while i < len(line):
+            if line[i:i+2] == "**":
+                j = line.find("**", i+2)
+                run = p.add_run(line[i+2:j])
+                run.bold = True
+                i = j+2
+            elif line[i] == "*":
+                j = line.find("*", i+1)
+                run = p.add_run(line[i+1:j])
+                run.italic = True
+                i = j+1
+            else:
+                # normal text
+                j = i
+                while j < len(line) and line[j] not in "*":
+                    j += 1
+                p.add_run(line[i:j])
+                i = j
