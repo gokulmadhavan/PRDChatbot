@@ -1,148 +1,157 @@
-# app.py
-import os
-import time
-import logging
-from functools import wraps
-from dotenv import load_dotenv
 import streamlit as st
-from openai import OpenAI, RateLimitError, APIError, Timeout
-from utils import parse_prd_file, fill_prd_template, prd_template
+from dotenv import load_dotenv
+from utils import prd_template, prd_fields_and_questions, fill_prd_template
+import os
+import openai
+import time
+from io import BytesIO
+from docx import Document
+from fpdf import FPDF
 
-# Load environment variables
+# --- Setup ---
 load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "secret123")
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
+st.set_page_config(page_title="PRD Chatbot", layout="centered")
 
-# Constants
-PASSWORD = os.getenv("APP_PASSWORD")
-API_KEY = os.getenv("OPENAI_API_KEY")
-oai_client = OpenAI(api_key=API_KEY)
-
-# Retry decorator with rate limits and fallback
-RATE_LIMIT_SECONDS = 3
-
-def retry_with_backoff(max_retries=3):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            delay = RATE_LIMIT_SECONDS
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except (RateLimitError, Timeout) as e:
-                    logging.warning(f"Rate limit or timeout error: {e}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
-                    delay *= 2
-                except APIError as e:
-                    logging.error(f"API error: {e}")
-                    break
-                except Exception as e:
-                    logging.error(f"Unexpected error: {e}")
-                    break
-            return "⚠️ Sorry, something went wrong. Please try again later."
-        return wrapper
-    return decorator
-
-# Streamlit App
-st.set_page_config(page_title="PRD Chatbot", layout="wide")
-
-# Password Gate CSS
-st.markdown("""
-    <style>
-    .centered-container {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        backdrop-filter: blur(8px);
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        z-index: 9999;
-        background-color: rgba(255, 255, 255, 0.7);
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Password logic
+# --- Session State ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "last_field" not in st.session_state:
+    st.session_state.last_field = None
+if "export_format" not in st.session_state:
+    st.session_state.export_format = "txt"
+
+# --- Password Modal ---
+def show_password_modal():
+    st.markdown("""
+        <style>
+        .stApp { backdrop-filter: blur(6px); }
+        .password-box {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            max-width: 400px;
+            margin: 8% auto;
+            box-shadow: 0 0 15px rgba(0,0,0,0.15);
+            text-align: center;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    with st.container():
+        st.markdown('<div class="password-box">', unsafe_allow_html=True)
+        st.markdown("### 🔐 Enter Password")
+        password_input = st.text_input("Password", type="password")
+        if st.button("Unlock"):
+            if password_input == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 if not st.session_state.authenticated:
-    st.subheader("🔐 Enter Password")
-    password_input = st.text_input("Password", type="password")
-    if password_input == PASSWORD:
-        st.session_state.authenticated = True
-        st.success("Access granted! Redirecting...")
-        st.rerun()
-    elif password_input:
-        st.error("Incorrect password. Please try again.")
-    st.markdown('</div></div>', unsafe_allow_html=True)
+    show_password_modal()
     st.stop()
 
-# ==== Main App Interface ====
-st.title("📄 PRD Assistant Chatbot")
-
-st.sidebar.header("Upload Existing PRD")
-uploaded_file = st.sidebar.file_uploader("Choose a PRD file", type=["docx", "pdf", "md", "txt"])
-
-context_from_file = ""
-if uploaded_file:
+# --- Inference Helper ---
+def infer_fields_from_text(text, current_answers):
+    prompt = "You're a helpful assistant filling out a Product Requirement Document (PRD). Extract as many fields as possible from this input and return them in the format:\n\nTitle: ...\nPurpose: ...\n...\n\nOnly include fields from this list:\n" + ", ".join([f[0] for f in prd_fields_and_questions]) + f"\n\nUser input:\n{text}"
     try:
-        context_from_file = parse_prd_file(uploaded_file)
-        st.sidebar.success("Document parsed successfully.")
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # or "gpt-4", replace as needed
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.3
+        )
+        content = response.choices[0].message.content
+        updates = {}
+        for line in content.strip().splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                k, v = k.strip(), v.strip()
+                if k in [f[0] for f in prd_fields_and_questions] and v:
+                    updates[k] = v
+        return updates
+    except openai.error.RateLimitError:
+        st.warning("⚠️ Rate limit hit. Please wait a moment.")
+        time.sleep(5)
+        return {}
     except Exception as e:
-        logging.error(f"File parsing error: {e}")
-        st.sidebar.error("Failed to parse file. Please try another format.")
+        st.error(f"❌ Error contacting OpenAI: {e}")
+        return {}
 
-st.write("👩‍💼 *Hello! I’m your PRD secretary. I’ll help you fill this out. Just answer my questions!*")
+# --- Chat Display ---
+st.title("📄 PRD Chatbot Assistant")
 
-# Initialize chat history
-if "chat" not in st.session_state:
-    st.session_state.chat = []
-    st.session_state.answers = {}
+for role, message in st.session_state.chat_history:
+    with st.chat_message(role):
+        st.markdown(message)
 
-# Ask questions and collect answers
-questions = [
-    ("Title", "What is the title of the product or feature?"),
-    ("Purpose", "Why does this product exist? What problem does it solve?"),
-    ("Target Audience", "Who is the primary audience for this product?"),
-    ("User Personas", "Can you describe the main user personas?")
-    # More questions can be added as needed
-]
-
-for field, question in questions:
+# --- Next Field Logic ---
+next_q = None
+for field, question in prd_fields_and_questions:
     if field not in st.session_state.answers:
-        example = " (e.g., 'Productivity Dashboard for Analysts')" if field == "Title" else ""
-        user_input = st.text_input(f"{question}{example}")
-        if user_input:
+        next_q = (field, question)
+        break
+
+# --- Chat Interaction ---
+if next_q:
+    field, question = next_q
+    with st.chat_message("assistant"):
+        st.markdown(f"**{question}**")
+
+    user_input = st.chat_input("Your response...")
+    if user_input:
+        st.session_state.chat_history.append(("user", user_input))
+        inferred = infer_fields_from_text(user_input, st.session_state.answers)
+        st.session_state.answers.update(inferred)
+        if field not in inferred:
             st.session_state.answers[field] = user_input
-            st.rerun()
+        with st.chat_message("assistant"):
+            st.markdown("✅ Got it. Updating the document...")
+        st.rerun()
+else:
+    with st.chat_message("assistant"):
+        st.markdown("🎉 All set! You can download your PRD below or preview it live.")
 
-# Call OpenAI API with retry logic
-@retry_with_backoff()
-def generate_prd_response(context):
-    response = oai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are an experienced product assistant who helps fill out Product Requirement Documents thoroughly."},
-            {"role": "user", "content": context}
-        ],
-        temperature=0.5
-    )
-    return response.choices[0].message.content
+# --- Filled PRD ---
+filled_prd = fill_prd_template(prd_template, st.session_state.answers)
 
-# Finalize
-if st.button("📝 Generate PRD"):
-    try:
-        combined_input = context_from_file + "\n\n" + "\n".join([f"{k}: {v}" for k, v in st.session_state.answers.items()])
-        prd_output = generate_prd_response(combined_input)
-        completed_prd = fill_prd_template(prd_template, prd_output)
-        st.session_state.final_prd = completed_prd
-        st.success("PRD successfully generated!")
-        st.download_button("📥 Download Now", completed_prd, file_name="Filled_PRD.txt")
-    except Exception as e:
-        logging.error(f"Final PRD generation error: {e}")
-        st.error("Failed to generate the PRD. Please try again later.")
+# --- Export Options ---
+st.subheader("📦 Export Options")
+format = st.selectbox("Choose format", ["txt", "md", "docx", "pdf"])
+st.session_state.export_format = format
+
+def convert_and_download(format, content):
+    if format == "txt":
+        st.download_button("📥 Download TXT", content, file_name="PRD.txt")
+    elif format == "md":
+        st.download_button("📥 Download Markdown", content, file_name="PRD.md")
+    elif format == "docx":
+        doc = Document()
+        for para in content.split("\n"):
+            doc.add_paragraph(para)
+        buffer = BytesIO()
+        doc.save(buffer)
+        st.download_button("📥 Download DOCX", buffer.getvalue(), file_name="PRD.docx")
+    elif format == "pdf":
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        for line in content.split("\n"):
+            pdf.multi_cell(0, 8, txt=line)
+        buffer = BytesIO()
+        pdf.output(buffer)
+        st.download_button("📥 Download PDF", buffer.getvalue(), file_name="PRD.pdf")
+
+convert_and_download(format, filled_prd)
+
+# --- Live Preview ---
+with st.expander("📄 Live Preview of PRD", expanded=True):
+    st.markdown("```markdown\n" + filled_prd + "\n```")
