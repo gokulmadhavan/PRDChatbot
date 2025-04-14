@@ -55,7 +55,7 @@ def llm_extract_and_ask(user_text:str, answers:dict):
     sys = (
         "You are an expert product‑requirements interviewer. "
         "You have the PRD field list below. "
-        "1️⃣ Extract ANY fields you see in the user's reply.\n"
+        "1️⃣ Extract ANY fields you see in the user's reply. If the user's reply is a question, answer it first.\n"
         "2️⃣ If some fields remain blank, ask ONE concise follow‑up question "
         "that will most efficiently obtain missing info. "
         "3️⃣ Return ONLY valid JSON with keys extracted_fields and next_question.\n\n"
@@ -130,19 +130,36 @@ st.divider()
 st.subheader("📦 Export")
 fmt = st.selectbox("Format", ["txt","md","docx","pdf"])
 def export(content, fmt):
-    if fmt=="txt":
+    if fmt == "txt":
         st.download_button("Download TXT", content, "PRD.txt")
-    elif fmt=="md":
+
+    elif fmt == "md":
         st.download_button("Download Markdown", content, "PRD.md")
-    elif fmt=="docx":
-        doc = Document(); [doc.add_paragraph(p) for p in content.split("\n")]
-        buf = BytesIO(); doc.save(buf)
+
+    elif fmt == "docx":
+        doc = Document()
+        for p in content.split("\n"):
+            doc.add_paragraph(p)
+        buf = BytesIO()
+        doc.save(buf)
         st.download_button("Download DOCX", buf.getvalue(), "PRD.docx")
-    elif fmt=="pdf":
-        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12)
-        for line in content.split("\n"): pdf.multi_cell(0, 8, line)
-        buf = BytesIO(); pdf.output(buf)
-        st.download_button("Download PDF", buf.getvalue(), "PRD.pdf")
+
+    elif fmt == "pdf":
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        for line in content.split("\n"):
+            pdf.multi_cell(0, 8, line)
+
+        pdf_bytes = pdf.output(dest="S").encode("latin-1")
+        st.download_button(
+            "Download PDF",
+            pdf_bytes,
+            file_name="PRD.pdf",
+            mime="application/pdf"
+        )
+
 export(filled_prd, fmt)
 
 with st.expander("📄 Live PRD Preview", expanded=True):
