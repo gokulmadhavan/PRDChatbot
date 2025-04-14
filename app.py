@@ -22,7 +22,6 @@ oai_client = OpenAI(api_key=API_KEY)
 # Retry decorator with rate limits and fallback
 RATE_LIMIT_SECONDS = 3
 
-
 def retry_with_backoff(max_retries=3):
     def decorator(func):
         @wraps(func)
@@ -47,20 +46,49 @@ def retry_with_backoff(max_retries=3):
 
 # Streamlit App
 st.set_page_config(page_title="PRD Chatbot", layout="wide")
-st.title("📄 PRD Assistant Chatbot")
+st.markdown("""
+    <style>
+    .centered-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        backdrop-filter: blur(8px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+        background-color: rgba(255, 255, 255, 0.5);
+    }
+    .password-box {
+        background: white;
+        padding: 2rem;
+        border-radius: 12px;
+        box-shadow: 0 0 25px rgba(0,0,0,0.1);
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # Password Gate
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    password_input = st.text_input("Enter Password", type="password")
-    if password_input == PASSWORD:
-        st.session_state.authenticated = True
-        st.success("Access granted!")
-    elif password_input:
-        st.error("Incorrect password. Please try again.")
+    with st.container():
+        st.markdown('<div class="centered-container"><div class="password-box">', unsafe_allow_html=True)
+        password_input = st.text_input("Enter Password", type="password")
+        if password_input == PASSWORD:
+            st.session_state.authenticated = True
+            st.success("Access granted!")
+            st.rerun()
+        elif password_input:
+            st.error("Incorrect password. Please try again.")
+        st.markdown('</div></div>', unsafe_allow_html=True)
     st.stop()
+
+# ==== Main App Interface ====
+st.title("📄 PRD Assistant Chatbot")
 
 st.sidebar.header("Upload Existing PRD")
 uploaded_file = st.sidebar.file_uploader("Choose a PRD file", type=["docx", "pdf", "md", "txt"])
