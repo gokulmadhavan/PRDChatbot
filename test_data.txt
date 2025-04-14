@@ -1,0 +1,11 @@
+Title: Unified Analytics Dashboard
+Purpose: To streamline KPI reporting across departments
+Target Audience: Data Analysts, Product Managers
+User Personas: 
+- Analyst Alice: Digs into data daily, needs quick access to filtered dashboards
+- PM Priya: Wants snapshot insights and report exports
+
+Extra Notes:
+- Connects to BigQuery, Snowflake, and Google Sheets
+- Initial rollout planned for marketing team
+- Expected go-live: Q2 FY25
