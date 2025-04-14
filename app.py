@@ -65,7 +65,7 @@ def infer_fields_from_text(text, current_answers):
     prompt = "You're a helpful assistant filling out a Product Requirement Document (PRD). Extract as many fields as possible from this input and return them in the format:\n\nTitle: ...\nPurpose: ...\n...\n\nOnly include fields from this list:\n" + ", ".join([f[0] for f in prd_fields_and_questions]) + f"\n\nUser input:\n{text}"
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # or "gpt-4", replace as needed
+            model="gpt-4",  # or "gpt-4", replace as needed
             messages=[{"role": "system", "content": prompt}],
             temperature=0.3
         )
