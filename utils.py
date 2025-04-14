@@ -148,7 +148,7 @@ def fill_prd_template(template: str, answers: dict[str, str]) -> str:
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text  import WD_BREAK
 
-def markdown_to_docx(doc: Document, md: str):
+def markdown_to_docx(doc: docx.Document, md: str):
     """
     Very small subset: headings, bold, italic, bullets, paragraphs.
     """
